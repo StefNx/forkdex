@@ -1549,13 +1549,6 @@
       },
       "type": "object"
     },
-    "ToolExecutionMode": {
-      "enum": [
-        "auto",
-        "manual"
-      ],
-      "type": "string"
-    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1602,15 +1595,6 @@
             "type": "string"
           },
           "type": "array"
-        },
-        "execution_mode": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ToolExecutionMode"
-            }
-          ],
-          "default": null,
-          "description": "Execution policy for approval-capable tools."
         },
         "view_image": {
           "default": null,

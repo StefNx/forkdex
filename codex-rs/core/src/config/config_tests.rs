@@ -197,7 +197,6 @@ web_search = true
             web_search: None,
             view_image: None,
             enabled: None,
-            execution_mode: None,
         })
     );
 }
@@ -218,17 +217,15 @@ web_search = false
             web_search: None,
             view_image: None,
             enabled: None,
-            execution_mode: None,
         })
     );
 }
 
 #[test]
-fn tools_enabled_deserialize_with_execution_mode() {
+fn tools_enabled_deserializes() {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [tools]
-execution_mode = "manual"
 enabled = ["shell", "apply_patch"]
 "#,
     )
@@ -240,7 +237,6 @@ enabled = ["shell", "apply_patch"]
             web_search: None,
             view_image: None,
             enabled: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
-            execution_mode: Some(ToolExecutionMode::Manual),
         })
     );
 }
@@ -4406,7 +4402,6 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             web_search_config: None,
             enabled_tool_capabilities: None,
             legacy_view_image_override: None,
-            tool_execution_mode: ToolExecutionMode::Auto,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4550,7 +4545,6 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         web_search_config: None,
         enabled_tool_capabilities: None,
         legacy_view_image_override: None,
-        tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4692,7 +4686,6 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         web_search_config: None,
         enabled_tool_capabilities: None,
         legacy_view_image_override: None,
-        tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4820,7 +4813,6 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         web_search_config: None,
         enabled_tool_capabilities: None,
         legacy_view_image_override: None,
-        tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
