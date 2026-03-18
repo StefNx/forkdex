@@ -51,7 +51,7 @@ use tracing::warn;
 /// plenty for an interactive CLI.
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
-fn colorize(text: &str, style: Style) -> String {
+pub(crate) fn colorize(text: &str, style: Style) -> String {
     text.if_supports_color(Stream::Stderr, |value| value.style(style))
         .to_string()
 }
@@ -107,6 +107,7 @@ async fn websocket_upgrade_handler(
 pub enum AppServerTransport {
     Stdio,
     WebSocket { bind_address: SocketAddr },
+    RemoteControlled,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

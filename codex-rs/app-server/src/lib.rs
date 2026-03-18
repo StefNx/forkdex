@@ -76,6 +76,8 @@ mod thread_state;
 mod thread_status;
 mod transport;
 
+mod remote_control;
+
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
@@ -355,35 +357,10 @@ pub async fn run_main_with_transport(
 
     enum TransportRuntime {
         Stdio,
-        WebSocket {
-            accept_handle: JoinHandle<()>,
-            shutdown_token: CancellationToken,
-        },
+        WebSocket,
+        RemoteControlled,
     }
 
-    let mut stdio_handles = Vec::<JoinHandle<()>>::new();
-    let transport_runtime = match transport {
-        AppServerTransport::Stdio => {
-            start_stdio_connection(transport_event_tx.clone(), &mut stdio_handles).await?;
-            TransportRuntime::Stdio
-        }
-        AppServerTransport::WebSocket { bind_address } => {
-            let shutdown_token = CancellationToken::new();
-            let accept_handle = start_websocket_acceptor(
-                bind_address,
-                transport_event_tx.clone(),
-                shutdown_token.clone(),
-            )
-            .await?;
-            TransportRuntime::WebSocket {
-                accept_handle,
-                shutdown_token,
-            }
-        }
-    };
-    let single_client_mode = matches!(&transport_runtime, TransportRuntime::Stdio);
-    let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -465,6 +442,47 @@ pub async fn run_main_with_transport(
         };
         config_warnings.push(message);
     }
+
+    let transport_shutdown_token = CancellationToken::new();
+    let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
+    let transport_runtime = match transport {
+        AppServerTransport::Stdio => {
+            start_stdio_connection(transport_event_tx.clone(), &mut transport_accept_handles)
+                .await?;
+            TransportRuntime::Stdio
+        }
+        AppServerTransport::WebSocket { bind_address } => {
+            transport_accept_handles.push(
+                start_websocket_acceptor(
+                    bind_address,
+                    transport_event_tx.clone(),
+                    transport_shutdown_token.clone(),
+                )
+                .await?,
+            );
+            TransportRuntime::WebSocket
+        }
+        AppServerTransport::RemoteControlled => {
+            transport_accept_handles.push(
+                remote_control::start_remote_control(
+                    config.chatgpt_base_url.clone(),
+                    config.codex_home.clone(),
+                    AuthManager::shared(
+                        config.codex_home.clone(),
+                        false,
+                        config.cli_auth_credentials_store_mode,
+                    ),
+                    transport_event_tx.clone(),
+                    transport_shutdown_token.clone(),
+                )
+                .await?,
+            );
+            TransportRuntime::RemoteControlled
+        }
+    };
+    let single_client_mode = matches!(&transport_runtime, TransportRuntime::Stdio);
+    let shutdown_when_no_connections = single_client_mode;
+    let graceful_signal_restart_enabled = !single_client_mode;
 
     if let Some(warning) = project_config_warning(&config) {
         config_warnings.push(warning);
@@ -619,10 +637,7 @@ pub async fn run_main_with_transport(
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
-        let websocket_accept_shutdown = match &transport_runtime {
-            TransportRuntime::WebSocket { shutdown_token, .. } => Some(shutdown_token.clone()),
-            TransportRuntime::Stdio => None,
-        };
+        let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
@@ -635,9 +650,7 @@ pub async fn run_main_with_transport(
                     shutdown_state.update(running_turn_count, connections.len()),
                     ShutdownAction::Finish
                 ) {
-                    if let Some(shutdown_token) = &websocket_accept_shutdown {
-                        shutdown_token.cancel();
-                    }
+                    transport_shutdown_token.cancel();
                     let _ = outbound_control_tx
                         .send(OutboundControlEvent::DisconnectAll)
                         .await;
@@ -833,16 +846,8 @@ pub async fn run_main_with_transport(
     let _ = processor_handle.await;
     let _ = outbound_handle.await;
 
-    if let TransportRuntime::WebSocket {
-        accept_handle,
-        shutdown_token,
-    } = transport_runtime
-    {
-        shutdown_token.cancel();
-        let _ = accept_handle.await;
-    }
-
-    for handle in stdio_handles {
+    transport_shutdown_token.cancel();
+    for handle in transport_accept_handles {
         let _ = handle.await;
     }
 
