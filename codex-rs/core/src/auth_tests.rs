@@ -573,7 +573,7 @@ async fn stale_proactive_refresh_without_identity_claims_still_attempts_refresh(
 
 #[tokio::test]
 #[serial(codex_api_key)]
-async fn refresh_token_reused_without_account_id_keeps_relogin_when_disk_auth_gains_account_id() {
+async fn refresh_token_reused_without_account_id_adopts_auth_when_disk_auth_gains_account_id() {
     let server = MockServer::start().await;
     let ctx = Arc::new(RefreshTokenTestContext::new(&server));
     let stale_auth = managed_auth_dot_json(
@@ -614,7 +614,7 @@ async fn refresh_token_reused_without_account_id_keeps_relogin_when_disk_auth_ga
     ctx.auth_manager
         .refresh_token_from_authority()
         .await
-        .expect_err("auth with a new account id should not be adopted");
+        .expect("same-user auth with a new account id should be adopted");
     assert_eq!(
         ctx.auth_manager
             .auth_cached()
@@ -622,7 +622,7 @@ async fn refresh_token_reused_without_account_id_keeps_relogin_when_disk_auth_ga
             .get_token_data()
             .expect("token data")
             .access_token,
-        "stale-access"
+        "newer-access"
     );
 
     server.verify().await;
