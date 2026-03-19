@@ -31,6 +31,48 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
     }
 }
 
+fn tool_info(tool: rmcp::model::Tool) -> ToolInfo {
+    ToolInfo {
+        server_name: "server".to_string(),
+        tool_name: tool.name.to_string(),
+        tool_namespace: "server/".to_string(),
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
+fn tool_info_for_name(qualified_name: &str, tool: rmcp::model::Tool) -> ToolInfo {
+    let server_name = qualified_name
+        .split_once('/')
+        .map(|(server_name, _)| server_name.to_string())
+        .unwrap_or_else(|| "server".to_string());
+    ToolInfo {
+        server_name,
+        tool_name: tool.name.to_string(),
+        tool_namespace: qualified_name.to_string(),
+        tool,
+        connector_id: None,
+        connector_name: None,
+        plugin_display_names: Vec::new(),
+        connector_description: None,
+    }
+}
+
+fn mcp_tools_map<const N: usize>(
+    entries: [(String, rmcp::model::Tool); N],
+) -> HashMap<String, ToolInfo> {
+    entries
+        .into_iter()
+        .map(|(qualified_name, tool)| {
+            let tool_info = tool_info_for_name(&qualified_name, tool);
+            (qualified_name, tool_info)
+        })
+        .collect()
+}
+
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
     let slug = name.replace(' ', "-").to_lowercase();
     DiscoverableTool::Connector(Box::new(AppInfo {
@@ -75,8 +117,8 @@ fn mcp_tool_to_openai_tool_inserts_empty_properties() {
         meta: None,
     };
 
-    let openai_tool =
-        mcp_tool_to_openai_tool("server/no_props".to_string(), tool).expect("convert tool");
+    let openai_tool = mcp_tool_to_openai_tool("server/no_props".to_string(), tool_info(tool))
+        .expect("convert tool");
     let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
 
     assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
@@ -112,8 +154,9 @@ fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
         meta: None,
     };
 
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool)
-        .expect("convert tool");
+    let openai_tool =
+        mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool_info(tool))
+            .expect("convert tool");
 
     assert_eq!(
         openai_tool.output_schema,
@@ -165,8 +208,9 @@ fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
         meta: None,
     };
 
-    let openai_tool = mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool)
-        .expect("convert tool");
+    let openai_tool =
+        mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool_info(tool))
+            .expect("convert tool");
 
     assert_eq!(
         openai_tool.output_schema,
@@ -206,9 +250,11 @@ fn search_tool_deferred_tools_always_set_defer_loading_true() {
         }),
     );
 
-    let openai_tool =
-        mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
-            .expect("convert deferred tool");
+    let openai_tool = mcp_tool_to_deferred_openai_tool(
+        "mcp__codex_apps__lookup_order".to_string(),
+        &tool_info(tool),
+    )
+    .expect("convert deferred tool");
 
     assert_eq!(openai_tool.defer_loading, Some(true));
 }
@@ -229,8 +275,11 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
     );
 
     let serialized = serde_json::to_value(ToolSpec::Function(
-        mcp_tool_to_deferred_openai_tool("mcp__codex_apps__lookup_order".to_string(), tool)
-            .expect("convert deferred tool"),
+        mcp_tool_to_deferred_openai_tool(
+            "mcp__codex_apps__lookup_order".to_string(),
+            &tool_info(tool),
+        )
+        .expect("convert deferred tool"),
     ))
     .expect("serialize deferred tool");
 
@@ -463,6 +512,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_content_types: None,
         },
         create_view_image_tool(config.can_request_original_image_detail),
+        create_download_openai_file_tool(),
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
         create_resume_agent_tool(),
@@ -1193,6 +1243,7 @@ fn test_build_specs_gpt5_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1216,6 +1267,7 @@ fn test_build_specs_gpt51_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1241,6 +1293,7 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1266,6 +1319,7 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1289,6 +1343,7 @@ fn test_gpt_5_1_codex_max_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1312,6 +1367,7 @@ fn test_codex_5_1_mini_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1334,6 +1390,7 @@ fn test_gpt_5_defaults() {
             "request_user_input",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1357,6 +1414,7 @@ fn test_gpt_5_1_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1382,6 +1440,7 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
+            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1565,7 +1624,7 @@ fn test_build_specs_mcp_tools_converted() {
     });
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "test_server/do_something_cool".to_string(),
             mcp_tool(
                 "do_something_cool",
@@ -1658,7 +1717,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
     });
 
     // Intentionally construct a map with keys that would sort alphabetically.
-    let tools_map: HashMap<String, rmcp::model::Tool> = HashMap::from([
+    let tools_map = mcp_tools_map([
         (
             "test_server/do".to_string(),
             mcp_tool("a", "a", serde_json::json!({"type": "object"})),
@@ -1707,7 +1766,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([
+        Some(mcp_tools_map([
             (
                 "mcp__codex_apps__calendar_create_event".to_string(),
                 mcp_tool(
@@ -2136,7 +2195,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/search".to_string(),
             mcp_tool(
                 "search",
@@ -2196,7 +2255,7 @@ fn test_mcp_tool_integer_normalized_to_number() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/paginate".to_string(),
             mcp_tool(
                 "paginate",
@@ -2253,7 +2312,7 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/tags".to_string(),
             mcp_tool(
                 "tags",
@@ -2312,7 +2371,7 @@ fn test_mcp_tool_anyof_defaults_to_string() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "dash/value".to_string(),
             mcp_tool(
                 "value",
@@ -2508,7 +2567,7 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
     });
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "test_server/do_something_cool".to_string(),
             mcp_tool(
                 "do_something_cool",
@@ -2651,7 +2710,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
 
     let (tools, _) = build_specs(
         &tools_config,
-        Some(HashMap::from([(
+        Some(mcp_tools_map([(
             "mcp__sample__echo".to_string(),
             mcp_tool(
                 "echo",
