@@ -1154,11 +1154,25 @@ impl AuthManager {
         let new_auth = self.load_auth_from_storage();
         let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
 
+        if new_account_id.is_none() {
+            tracing::info!(
+                "Skipping auth reload because the on-disk auth does not contain account_id."
+            );
+            return ReloadOutcome::SkippedUnknownIdentity;
+        }
+
         if new_account_id.as_deref() != Some(expected_account_id) {
             let found_account_id = new_account_id.as_deref().unwrap_or("unknown");
             tracing::info!(
                 "Skipping auth reload due to account id mismatch (expected: {expected_account_id}, found: {found_account_id})"
             );
+            return ReloadOutcome::SkippedDifferentIdentity;
+        }
+
+        let cached_user_id = cached_auth.and_then(CodexAuth::get_chatgpt_user_id);
+        let new_user_id = new_auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id);
+        if cached_user_id.is_some() && new_user_id.is_some() && cached_user_id != new_user_id {
+            tracing::info!("Skipping auth reload because chatgpt_user_id changed during refresh.");
             return ReloadOutcome::SkippedDifferentIdentity;
         }
 
@@ -1187,12 +1201,6 @@ impl AuthManager {
             tracing::info!("Skipping auth reload because no auth is available on disk.");
             return ReloadOutcome::SkippedUnknownIdentity;
         };
-        if new_auth_ref.get_account_id().is_some() {
-            tracing::info!(
-                "Skipping auth reload because the on-disk auth has an account id and the cached auth does not."
-            );
-            return ReloadOutcome::SkippedDifferentIdentity;
-        }
         if !Self::same_refresh_identity(cached_auth, new_auth_ref) {
             if cached_auth.get_chatgpt_user_id().is_none() {
                 tracing::info!(
@@ -1204,6 +1212,12 @@ impl AuthManager {
                 "Skipping auth reload because chatgpt_user_id does not match during refresh."
             );
             return ReloadOutcome::SkippedDifferentIdentity;
+        }
+
+        if new_auth_ref.get_account_id().is_some() {
+            tracing::info!(
+                "Reloading auth for matching chatgpt_user_id after account_id appeared on disk."
+            );
         }
 
         let auth_changed = !Self::auths_equal_for_refresh(Some(cached_auth), new_auth.as_ref());

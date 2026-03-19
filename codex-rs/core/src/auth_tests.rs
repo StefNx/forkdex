@@ -422,7 +422,65 @@ async fn stale_proactive_refresh_does_not_overwrite_a_different_account_on_disk(
 
 #[tokio::test]
 #[serial(codex_api_key)]
-async fn stale_proactive_refresh_without_account_id_does_not_adopt_auth_with_account_id() {
+async fn stale_proactive_refresh_does_not_adopt_a_different_user_in_same_account() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server);
+    let stale_auth = managed_auth_dot_json(
+        "stale-access",
+        "stale-refresh",
+        Some("account-a"),
+        "user-a",
+        "user-a@example.com",
+        refresh_time_days_ago(31),
+    );
+    ctx.write_auth(&stale_auth);
+
+    let other_user_auth = managed_auth_dot_json(
+        "other-access",
+        "other-refresh",
+        Some("account-a"),
+        "user-b",
+        "user-b@example.com",
+        Utc::now(),
+    );
+    save_auth(
+        ctx.codex_home.path(),
+        &other_user_auth,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("persist different-user auth in same account");
+
+    let returned_auth = ctx.auth_manager.auth().await.expect("auth should exist");
+    assert_eq!(
+        returned_auth
+            .get_token_data()
+            .expect("token data")
+            .access_token,
+        "stale-access"
+    );
+    assert_eq!(
+        ctx.auth_manager
+            .auth_cached()
+            .expect("cached auth")
+            .get_token_data()
+            .expect("token data")
+            .access_token,
+        "stale-access"
+    );
+
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
+async fn stale_proactive_refresh_without_account_id_adopts_auth_with_account_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
@@ -463,12 +521,12 @@ async fn stale_proactive_refresh_without_account_id_does_not_adopt_auth_with_acc
             .get_token_data()
             .expect("token data")
             .access_token,
-        "stale-access"
+        "newer-access"
     );
     assert_eq!(
-        CodexAuth::from_auth_storage(ctx.codex_home.path(), AuthCredentialsStoreMode::File)
-            .expect("load auth from disk")
-            .expect("persisted auth")
+        ctx.auth_manager
+            .auth_cached()
+            .expect("cached auth")
             .get_token_data()
             .expect("token data")
             .access_token,
