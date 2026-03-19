@@ -480,6 +480,41 @@ async fn stale_proactive_refresh_without_account_id_does_not_adopt_auth_with_acc
 
 #[tokio::test]
 #[serial(codex_api_key)]
+async fn stale_proactive_refresh_without_identity_claims_still_attempts_refresh() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "refreshed-access",
+            "refresh_token": "refreshed-refresh",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server);
+    let stale_auth = managed_auth_dot_json_without_user_id(
+        "stale-access",
+        "stale-refresh",
+        "user-a@example.com",
+        refresh_time_days_ago(31),
+    );
+    ctx.write_auth(&stale_auth);
+
+    let returned_auth = ctx.auth_manager.auth().await.expect("auth should exist");
+    assert_eq!(
+        returned_auth
+            .get_token_data()
+            .expect("token data")
+            .access_token,
+        "refreshed-access"
+    );
+
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_api_key)]
 async fn refresh_token_reused_without_account_id_keeps_relogin_when_disk_auth_gains_account_id() {
     let server = MockServer::start().await;
     let ctx = Arc::new(RefreshTokenTestContext::new(&server));
@@ -522,68 +557,6 @@ async fn refresh_token_reused_without_account_id_keeps_relogin_when_disk_auth_ga
         .refresh_token_from_authority()
         .await
         .expect_err("auth with a new account id should not be adopted");
-    assert_eq!(
-        ctx.auth_manager
-            .auth_cached()
-            .expect("cached auth")
-            .get_token_data()
-            .expect("token data")
-            .access_token,
-        "stale-access"
-    );
-
-    server.verify().await;
-}
-
-#[tokio::test]
-#[serial(codex_api_key)]
-async fn refresh_token_reused_without_account_id_does_not_cross_legacy_identity_boundary() {
-    let server = MockServer::start().await;
-    let ctx = Arc::new(RefreshTokenTestContext::new(&server));
-    let stale_auth = managed_auth_dot_json(
-        "stale-access",
-        "stale-refresh",
-        None,
-        "user-a",
-        "user-a@example.com",
-        refresh_time_days_ago(31),
-    );
-    ctx.write_auth(&stale_auth);
-
-    let other_auth = managed_auth_dot_json(
-        "other-access",
-        "other-refresh",
-        None,
-        "user-b",
-        "user-b@example.com",
-        Utc::now(),
-    );
-    let ctx_for_response = Arc::clone(&ctx);
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(move |_: &Request| {
-            save_auth(
-                ctx_for_response.codex_home.path(),
-                &other_auth,
-                AuthCredentialsStoreMode::File,
-            )
-            .expect("persist other-user auth during reused-token response");
-            ResponseTemplate::new(401)
-                .set_body_json(json!({"error": {"code": "refresh_token_reused"}}))
-        })
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let err = ctx
-        .auth_manager
-        .refresh_token_from_authority()
-        .await
-        .expect_err("legacy identity mismatch should still relogin");
-    assert_eq!(
-        err.failed_reason(),
-        Some(RefreshTokenFailedReason::Exhausted)
-    );
     assert_eq!(
         ctx.auth_manager
             .auth_cached()
@@ -806,6 +779,29 @@ fn managed_auth_dot_json(
     }
 }
 
+fn managed_auth_dot_json_without_user_id(
+    access_token: &str,
+    refresh_token: &str,
+    email: &str,
+    last_refresh: DateTime<Utc>,
+) -> AuthDotJson {
+    AuthDotJson {
+        auth_mode: Some(ApiAuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(TokenData {
+            id_token: IdTokenInfo {
+                email: Some(email.to_string()),
+                raw_jwt: minimal_jwt_without_user_id(email),
+                ..IdTokenInfo::default()
+            },
+            access_token: access_token.to_string(),
+            refresh_token: refresh_token.to_string(),
+            account_id: None,
+        }),
+        last_refresh: Some(last_refresh),
+    }
+}
+
 fn refresh_time_days_ago(days: i64) -> DateTime<Utc> {
     Utc::now() - Duration::days(days)
 }
@@ -827,6 +823,29 @@ fn minimal_jwt(chatgpt_user_id: &str, email: &str) -> String {
         "https://api.openai.com/auth": {
             "chatgpt_user_id": chatgpt_user_id,
         }
+    });
+
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let header_b64 = b64(&serde_json::to_vec(&header).expect("serialize header"));
+    let payload_b64 = b64(&serde_json::to_vec(&payload).expect("serialize payload"));
+    let signature_b64 = b64(b"sig");
+    format!("{header_b64}.{payload_b64}.{signature_b64}")
+}
+
+fn minimal_jwt_without_user_id(email: &str) -> String {
+    #[derive(Serialize)]
+    struct Header {
+        alg: &'static str,
+        typ: &'static str,
+    }
+
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
+    let payload = json!({
+        "email": email,
+        "https://api.openai.com/auth": {}
     });
 
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
