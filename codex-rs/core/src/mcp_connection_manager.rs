@@ -587,7 +587,7 @@ pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
 /// When used, the `params` field of the notification is [`SandboxState`].
 pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxState {
     pub sandbox_policy: SandboxPolicy,
@@ -1154,6 +1154,7 @@ impl SharedMcpBackendCacheKey {
     pub(crate) fn new(
         mcp_servers: &HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
+        sandbox_state: &SandboxState,
         codex_apps_tools_cache_key: &CodexAppsToolsCacheKey,
     ) -> Self {
         let mut servers = mcp_servers
@@ -1171,6 +1172,7 @@ impl SharedMcpBackendCacheKey {
         servers.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
         let payload = canonicalize_json_value(serde_json::json!({
             "codexAppsToolsCacheKey": codex_apps_tools_cache_key,
+            "sandboxState": sandbox_state,
             "storeMode": store_mode,
             "servers": servers,
         }));
@@ -1469,8 +1471,12 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
     ) -> Self {
         let session = SessionMcpHandle::new(approval_policy.value(), tx_event.clone());
-        let key =
-            SharedMcpBackendCacheKey::new(mcp_servers, store_mode, &codex_apps_tools_cache_key);
+        let key = SharedMcpBackendCacheKey::new(
+            mcp_servers,
+            store_mode,
+            &initial_sandbox_state,
+            &codex_apps_tools_cache_key,
+        );
         let lease = pool
             .acquire_or_create(
                 key,
@@ -2843,16 +2849,24 @@ mod old_tests {
             chatgpt_user_id: Some("user-1".to_string()),
             is_workspace_account: false,
         };
+        let sandbox_state = SandboxState {
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            codex_linux_sandbox_exe: None,
+            sandbox_cwd: PathBuf::from("/tmp"),
+            use_legacy_landlock: false,
+        };
 
         assert_eq!(
             SharedMcpBackendCacheKey::new(
                 &left_servers,
                 OAuthCredentialsStoreMode::Auto,
+                &sandbox_state,
                 &codex_apps_tools_cache_key,
             ),
             SharedMcpBackendCacheKey::new(
                 &right_servers,
                 OAuthCredentialsStoreMode::Auto,
+                &sandbox_state,
                 &codex_apps_tools_cache_key,
             ),
         );
@@ -2873,8 +2887,65 @@ mod old_tests {
         };
 
         assert_ne!(
-            SharedMcpBackendCacheKey::new(&servers, OAuthCredentialsStoreMode::Auto, &left_user),
-            SharedMcpBackendCacheKey::new(&servers, OAuthCredentialsStoreMode::Auto, &right_user),
+            SharedMcpBackendCacheKey::new(
+                &servers,
+                OAuthCredentialsStoreMode::Auto,
+                &SandboxState {
+                    sandbox_policy: SandboxPolicy::DangerFullAccess,
+                    codex_linux_sandbox_exe: None,
+                    sandbox_cwd: PathBuf::from("/tmp"),
+                    use_legacy_landlock: false,
+                },
+                &left_user,
+            ),
+            SharedMcpBackendCacheKey::new(
+                &servers,
+                OAuthCredentialsStoreMode::Auto,
+                &SandboxState {
+                    sandbox_policy: SandboxPolicy::DangerFullAccess,
+                    codex_linux_sandbox_exe: None,
+                    sandbox_cwd: PathBuf::from("/tmp"),
+                    use_legacy_landlock: false,
+                },
+                &right_user,
+            ),
+        );
+    }
+
+    #[test]
+    fn shared_mcp_backend_cache_key_separates_sandbox_state() {
+        let servers = HashMap::new();
+        let codex_apps_tools_cache_key = CodexAppsToolsCacheKey {
+            account_id: None,
+            chatgpt_user_id: None,
+            is_workspace_account: false,
+        };
+        let left_sandbox_state = SandboxState {
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            codex_linux_sandbox_exe: None,
+            sandbox_cwd: PathBuf::from("/tmp/left"),
+            use_legacy_landlock: false,
+        };
+        let right_sandbox_state = SandboxState {
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            codex_linux_sandbox_exe: None,
+            sandbox_cwd: PathBuf::from("/tmp/right"),
+            use_legacy_landlock: false,
+        };
+
+        assert_ne!(
+            SharedMcpBackendCacheKey::new(
+                &servers,
+                OAuthCredentialsStoreMode::Auto,
+                &left_sandbox_state,
+                &codex_apps_tools_cache_key,
+            ),
+            SharedMcpBackendCacheKey::new(
+                &servers,
+                OAuthCredentialsStoreMode::Auto,
+                &right_sandbox_state,
+                &codex_apps_tools_cache_key,
+            ),
         );
     }
 
@@ -2888,7 +2959,7 @@ mod old_tests {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             codex_linux_sandbox_exe: None,
             sandbox_cwd: codex_home.path().to_path_buf(),
-            use_linux_sandbox_bwrap: false,
+            use_legacy_landlock: false,
         };
         let (tx_event_1, _rx_event_1) = async_channel::unbounded();
         let manager_1 = McpConnectionManager::new_with_pool(
@@ -2942,7 +3013,7 @@ mod old_tests {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             codex_linux_sandbox_exe: None,
             sandbox_cwd: codex_home.path().to_path_buf(),
-            use_linux_sandbox_bwrap: false,
+            use_legacy_landlock: false,
         };
         let (tx_event_1, _rx_event_1) = async_channel::unbounded();
         let manager_1 = McpConnectionManager::new_with_pool(
@@ -2987,6 +3058,65 @@ mod old_tests {
     }
 
     #[tokio::test]
+    async fn shared_mcp_backend_pool_separates_backends_for_different_sandbox_states() {
+        let pool = SharedMcpBackendPool::new();
+        let mcp_servers = HashMap::new();
+        let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        let codex_home = tempdir().expect("tempdir");
+        let left_sandbox_state = SandboxState {
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            codex_linux_sandbox_exe: None,
+            sandbox_cwd: codex_home.path().join("left"),
+            use_legacy_landlock: false,
+        };
+        let right_sandbox_state = SandboxState {
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            codex_linux_sandbox_exe: None,
+            sandbox_cwd: codex_home.path().join("right"),
+            use_legacy_landlock: false,
+        };
+        let cache_key = CodexAppsToolsCacheKey {
+            account_id: None,
+            chatgpt_user_id: None,
+            is_workspace_account: false,
+        };
+
+        let (tx_event_1, _rx_event_1) = async_channel::unbounded();
+        let manager_1 = McpConnectionManager::new_with_pool(
+            &pool,
+            SharedMcpBackendAcquireMode::ReuseExisting,
+            &mcp_servers,
+            OAuthCredentialsStoreMode::Auto,
+            HashMap::new(),
+            &approval_policy,
+            tx_event_1,
+            left_sandbox_state,
+            codex_home.path().to_path_buf(),
+            cache_key.clone(),
+            ToolPluginProvenance::default(),
+        )
+        .await;
+
+        let (tx_event_2, _rx_event_2) = async_channel::unbounded();
+        let manager_2 = McpConnectionManager::new_with_pool(
+            &pool,
+            SharedMcpBackendAcquireMode::ReuseExisting,
+            &mcp_servers,
+            OAuthCredentialsStoreMode::Auto,
+            HashMap::new(),
+            &approval_policy,
+            tx_event_2,
+            right_sandbox_state,
+            codex_home.path().to_path_buf(),
+            cache_key,
+            ToolPluginProvenance::default(),
+        )
+        .await;
+
+        assert!(!Arc::ptr_eq(&manager_1.backend, &manager_2.backend));
+    }
+
+    #[tokio::test]
     async fn shared_mcp_backend_pool_force_create_replaces_pool_entry_for_same_key() {
         let pool = SharedMcpBackendPool::new();
         let mcp_servers = HashMap::new();
@@ -2996,7 +3126,7 @@ mod old_tests {
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             codex_linux_sandbox_exe: None,
             sandbox_cwd: codex_home.path().to_path_buf(),
-            use_linux_sandbox_bwrap: false,
+            use_legacy_landlock: false,
         };
         let cache_key = CodexAppsToolsCacheKey {
             account_id: None,
