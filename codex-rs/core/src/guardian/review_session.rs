@@ -41,6 +41,7 @@ use super::GUARDIAN_REVIEWER_NAME;
 use super::prompt::guardian_policy_prompt;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const GUARDIAN_EAGER_INIT_SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const GUARDIAN_ACTIVE_FORK_CAP: usize = 10;
 
 #[derive(Debug)]
@@ -364,7 +365,9 @@ impl GuardianReviewSessionManager {
             }
         }
 
-        let _spawn_guard = self.spawn_lock.lock().await;
+        let Ok(_spawn_guard) = self.spawn_lock.try_lock() else {
+            return;
+        };
         match self.prepare_trunk(&next_reuse_key).await {
             GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted => return,
             GuardianTrunkState::NeedsSpawn {
@@ -377,20 +380,34 @@ impl GuardianReviewSessionManager {
         }
 
         let spawn_cancel_token = CancellationToken::new();
-        let review_session = match spawn_guardian_review_session(
-            &params,
-            params.spawn_config.clone(),
-            next_reuse_key,
-            spawn_cancel_token,
-            /*initial_history*/ None,
+        let review_session = match run_before_review_deadline_with_cancel(
+            tokio::time::Instant::now() + GUARDIAN_EAGER_INIT_SPAWN_TIMEOUT,
+            None,
+            &spawn_cancel_token,
+            Box::pin(spawn_guardian_review_session(
+                &params,
+                params.spawn_config.clone(),
+                next_reuse_key,
+                spawn_cancel_token.clone(),
+                /*initial_history*/ None,
+            )),
         )
         .await
         {
-            Ok(review_session) => Arc::new(review_session),
-            Err(err) => {
+            Ok(Ok(review_session)) => Arc::new(review_session),
+            Ok(Err(err)) => {
                 warn!("failed to eagerly initialize guardian review session: {err}");
                 return;
             }
+            Err(GuardianReviewSessionOutcome::TimedOut) => {
+                warn!("timed out while eagerly initializing guardian review session");
+                return;
+            }
+            Err(GuardianReviewSessionOutcome::Aborted) => {
+                warn!("unexpected abort while eagerly initializing guardian review session");
+                return;
+            }
+            Err(GuardianReviewSessionOutcome::Completed(_)) => unreachable!(),
         };
         match self.install_spawned_trunk(review_session).await {
             GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted => {}
