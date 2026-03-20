@@ -220,6 +220,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::SharedMcpBackendAcquireMode;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
 use crate::memories;
@@ -1930,6 +1931,7 @@ impl Session {
                 Some(shared_mcp_backend_pool) => (
                     McpConnectionManager::new_with_pool(
                         shared_mcp_backend_pool.as_ref(),
+                        SharedMcpBackendAcquireMode::ReuseExisting,
                         &mcp_servers,
                         config.mcp_oauth_credentials_store_mode,
                         auth_statuses.clone(),
@@ -4088,6 +4090,7 @@ impl Session {
             Some(shared_mcp_backend_pool) => (
                 McpConnectionManager::new_with_pool(
                     shared_mcp_backend_pool.as_ref(),
+                    SharedMcpBackendAcquireMode::ForceCreate,
                     &mcp_servers,
                     store_mode,
                     auth_statuses,
