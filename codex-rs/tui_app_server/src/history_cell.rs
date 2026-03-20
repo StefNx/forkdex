@@ -302,6 +302,53 @@ fn is_blank_line(line: &Line<'_>) -> bool {
         .all(|span| span.content.trim().is_empty())
 }
 
+fn is_but_boundary(ch: Option<char>) -> bool {
+    ch.is_none_or(|c| !c.is_alphanumeric() && c != '_')
+}
+
+fn highlight_but_in_span(span: &Span<'static>) -> Vec<Span<'static>> {
+    let content = span.content.as_ref();
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+
+    for (idx, _) in content.match_indices("but") {
+        let before = content[..idx].chars().next_back();
+        let after = content[idx + 3..].chars().next();
+        if !is_but_boundary(before) || !is_but_boundary(after) {
+            continue;
+        }
+
+        if cursor < idx {
+            out.push(Span::styled(content[cursor..idx].to_string(), span.style));
+        }
+        out.push(Span::styled("but".to_string(), span.style.fg(Color::Red)));
+        cursor = idx + 3;
+    }
+
+    if cursor == 0 {
+        return vec![span.clone()];
+    }
+
+    if cursor < content.len() {
+        out.push(Span::styled(content[cursor..].to_string(), span.style));
+    }
+
+    out
+}
+
+fn highlight_but_in_lines(lines: &[Line<'static>]) -> Vec<Line<'static>> {
+    lines.iter()
+        .map(|line| {
+            let spans = line
+                .spans
+                .iter()
+                .flat_map(highlight_but_in_span)
+                .collect::<Vec<_>>();
+            Line::from(spans).style(line.style)
+        })
+        .collect()
+}
+
 fn render_message_timestamp_line(timestamp: &str) -> Line<'static> {
     Line::from(vec![
         "  ".into(),
@@ -535,7 +582,7 @@ impl AgentMessageCell {
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         adaptive_wrap_lines(
-            &self.lines,
+            &highlight_but_in_lines(&self.lines),
             RtOptions::new(width as usize)
                 .initial_indent(if self.is_first_line {
                     "• ".dim().into()
@@ -3973,6 +4020,20 @@ mod tests {
         let lines = cell.display_lines(80);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn agent_message_highlights_only_standalone_but() {
+        let cell = AgentMessageCell::new(vec![Line::from("this but that button")], true);
+        let rendered = cell.display_lines(80);
+        let spans = &rendered[0].spans;
+
+        assert_eq!(
+            spans.iter().map(|span| span.content.as_ref()).collect::<Vec<_>>(),
+            vec!["• ", "this ", "but", " that button"]
+        );
+        assert_eq!(spans[2].style.fg, Some(Color::Red));
+        assert_ne!(spans[3].style.fg, Some(Color::Red));
     }
 
     #[test]
