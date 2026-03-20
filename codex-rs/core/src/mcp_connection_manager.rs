@@ -1402,7 +1402,7 @@ impl McpConnectionManager {
         Self::from_parts(
             Arc::new(SharedMcpBackend::new_uninitialized()),
             SessionMcpHandle::new(approval_policy.value(), tx_event),
-            None,
+            /*shared_backend_lease*/ None,
         )
     }
 
@@ -1451,7 +1451,11 @@ impl McpConnectionManager {
         )
         .await;
         (
-            Self::from_parts(Arc::new(backend), session, None),
+            Self::from_parts(
+                Arc::new(backend),
+                session,
+                /*shared_backend_lease*/ None,
+            ),
             cancel_token,
         )
     }

@@ -2628,9 +2628,9 @@ impl Session {
         self.new_turn_from_configuration(
             sub_id,
             session_configuration.clone(),
-            None,
+            /*final_output_json_schema*/ None,
             Self::sandbox_state_for_session_configuration(&session_configuration),
-            false,
+            /*sandbox_state_changed*/ false,
         )
         .await
     }

@@ -6,6 +6,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::McpProcess;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -32,6 +33,7 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -48,12 +50,11 @@ const STARTUP_COUNT_FILE_ENV_VAR: &str = "MCP_STARTUP_COUNT_FILE";
 
 #[tokio::test]
 async fn mcp_pool_survives_unsubscribe_of_one_loaded_thread() -> Result<()> {
-    let responses_server = responses::start_mock_server().await;
-    let _response_mock = responses::mount_sse_sequence(
-        &responses_server,
-        rmcp_echo_turn_bodies("after-unsubscribe"),
-    )
-    .await;
+    skip_if_no_network!(Ok(()));
+
+    let responses_server =
+        create_mock_responses_server_sequence_unchecked(rmcp_echo_turn_bodies("after-unsubscribe"))
+            .await;
 
     let codex_home = TempDir::new()?;
     let startup_count_file = codex_home.path().join("rmcp-startups.log");
@@ -89,9 +90,9 @@ async fn mcp_pool_survives_unsubscribe_of_one_loaded_thread() -> Result<()> {
 
 #[tokio::test]
 async fn mcp_pool_survives_archive_of_one_loaded_thread() -> Result<()> {
-    let responses_server = responses::start_mock_server().await;
-    let _response_mock = responses::mount_sse_sequence(
-        &responses_server,
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(
         [
             rmcp_echo_turn_bodies("materialize-archived-thread"),
             rmcp_echo_turn_bodies("after-archive"),
@@ -138,9 +139,9 @@ async fn mcp_pool_survives_archive_of_one_loaded_thread() -> Result<()> {
 
 #[tokio::test]
 async fn mcp_pool_recreates_backend_after_last_archive_and_resume() -> Result<()> {
-    let responses_server = responses::start_mock_server().await;
-    let _response_mock = responses::mount_sse_sequence(
-        &responses_server,
+    skip_if_no_network!(Ok(()));
+
+    let responses_server = create_mock_responses_server_sequence_unchecked(
         [
             rmcp_echo_turn_bodies("materialize-a"),
             rmcp_echo_turn_bodies("materialize-b"),
