@@ -467,3 +467,9 @@ fn resume_command_quotes_thread_name_when_needed() {
     let command = resume_command(Some("quote'case"), None);
     assert_eq!(command, Some("codex resume \"quote'case\"".to_string()));
 }
+
+#[test]
+fn resume_command_for_program_uses_forkdex_name() {
+    let command = resume_command_for_program("forkdex", Some("my-thread"), None);
+    assert_eq!(command, Some("forkdex resume my-thread".to_string()));
+}

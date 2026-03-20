@@ -235,6 +235,21 @@ pub fn normalize_thread_name(name: &str) -> Option<String> {
 }
 
 pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
+    let argv0 = std::env::args_os().next();
+    let program_name = argv0
+        .as_deref()
+        .and_then(|arg0| Path::new(arg0).file_name())
+        .and_then(|name| name.to_str())
+        .filter(|name| *name == "forkdex")
+        .unwrap_or("codex");
+    resume_command_for_program(program_name, thread_name, thread_id)
+}
+
+pub fn resume_command_for_program(
+    program_name: &str,
+    thread_name: Option<&str>,
+    thread_id: Option<ThreadId>,
+) -> Option<String> {
     let resume_target = thread_name
         .filter(|name| !name.is_empty())
         .map(str::to_string)
@@ -243,9 +258,9 @@ pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) ->
         let needs_double_dash = target.starts_with('-');
         let escaped = shlex_join(&[target]);
         if needs_double_dash {
-            format!("codex resume -- {escaped}")
+            format!("{program_name} resume -- {escaped}")
         } else {
-            format!("codex resume {escaped}")
+            format!("{program_name} resume {escaped}")
         }
     })
 }
