@@ -118,6 +118,8 @@ use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -1117,7 +1119,84 @@ enum ReplayKind {
     ThreadSnapshot,
 }
 
+#[derive(Clone, Debug)]
+struct ReplayEventRecord {
+    timestamp: Option<String>,
+    msg: EventMsg,
+}
+
+impl From<EventMsg> for ReplayEventRecord {
+    fn from(msg: EventMsg) -> Self {
+        Self {
+            timestamp: None,
+            msg,
+        }
+    }
+}
+
 impl ChatWidget {
+    fn replay_event_records_from_initial_messages(
+        initial_messages: Option<Vec<EventMsg>>,
+        rollout_path: Option<&Path>,
+    ) -> Option<Vec<ReplayEventRecord>> {
+        let messages = initial_messages?;
+        let fallback = || {
+            messages
+                .clone()
+                .into_iter()
+                .map(|msg| ReplayEventRecord {
+                    timestamp: None,
+                    msg,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let Some(path) = rollout_path else {
+            return Some(fallback());
+        };
+        let Some(rollout_records) = Self::load_rollout_replay_event_records(path) else {
+            return Some(fallback());
+        };
+
+        let matches_rollout = rollout_records.len() == messages.len()
+            && rollout_records.iter().zip(messages.iter()).all(|(record, msg)| {
+                serde_json::to_string(&record.msg).ok() == serde_json::to_string(msg).ok()
+            });
+
+        if matches_rollout {
+            Some(rollout_records)
+        } else {
+            Some(fallback())
+        }
+    }
+
+    fn load_rollout_replay_event_records(path: &Path) -> Option<Vec<ReplayEventRecord>> {
+        let file = std::fs::File::open(path).ok()?;
+        let reader = std::io::BufReader::new(file);
+        let mut events = Vec::new();
+
+        for line in std::io::BufRead::lines(reader) {
+            let Ok(line) = line else {
+                continue;
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+                continue;
+            };
+            if let RolloutItem::EventMsg(msg) = rollout_line.item {
+                events.push(ReplayEventRecord {
+                    timestamp: Some(rollout_line.timestamp),
+                    msg,
+                });
+            }
+        }
+
+        Some(events)
+    }
+
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
             && cfg!(not(target_os = "linux"))
@@ -1413,7 +1492,10 @@ impl ChatWidget {
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
         self.status_line_project_root_name_cache = None;
-        let initial_messages = event.initial_messages.clone();
+        let initial_messages = Self::replay_event_records_from_initial_messages(
+            event.initial_messages.clone(),
+            event.rollout_path.as_deref(),
+        );
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
@@ -1603,8 +1685,33 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message));
+    fn on_agent_message(&mut self, message: String, replay_timestamp: Option<String>) {
+        if let Some(timestamp) = replay_timestamp {
+            self.flush_answer_stream_with_separator();
+            self.flush_interrupt_queue();
+            self.flush_active_cell();
+
+            let mut rendered = Vec::new();
+            append_markdown(
+                &message,
+                /*width*/ None,
+                Some(self.config.cwd.as_path()),
+                &mut rendered,
+            );
+
+            if !rendered.is_empty() {
+                let cell = history_cell::timestamp_history_cell_with_value(
+                    Box::new(AgentMessageCell::new(rendered, /*is_first_line*/ true)),
+                    timestamp,
+                );
+                self.add_boxed_history(cell);
+            }
+
+            self.handle_stream_finished();
+            self.request_redraw();
+        } else {
+            self.finalize_completed_assistant_message(Some(&message));
+        }
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -5274,8 +5381,13 @@ impl ChatWidget {
     /// is intentionally conservative: only safe-to-replay items are rendered to
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
-    fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
-        for msg in events {
+    fn replay_initial_messages<I>(&mut self, events: I)
+    where
+        I: IntoIterator,
+        I::Item: Into<ReplayEventRecord>,
+    {
+        for record in events.into_iter().map(Into::into) {
+            let ReplayEventRecord { timestamp, msg } = record;
             if matches!(
                 msg,
                 EventMsg::SessionConfigured(_) | EventMsg::ThreadNameUpdated(_)
@@ -5287,13 +5399,14 @@ impl ChatWidget {
                 /*id*/ None,
                 msg,
                 Some(ReplayKind::ResumeInitialMessages),
+                timestamp,
             );
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, /*replay_kind*/ None);
+        self.dispatch_event_msg(Some(id), msg, /*replay_kind*/ None, /*replay_timestamp*/ None);
     }
 
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
@@ -5301,7 +5414,12 @@ impl ChatWidget {
         if matches!(msg, EventMsg::ShutdownComplete) {
             return;
         }
-        self.dispatch_event_msg(/*id*/ None, msg, Some(ReplayKind::ThreadSnapshot));
+        self.dispatch_event_msg(
+            /*id*/ None,
+            msg,
+            Some(ReplayKind::ThreadSnapshot),
+            /*replay_timestamp*/ None,
+        );
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -5314,6 +5432,7 @@ impl ChatWidget {
         id: Option<String>,
         msg: EventMsg,
         replay_kind: Option<ReplayKind>,
+        replay_timestamp: Option<String>,
     ) {
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
@@ -5346,7 +5465,7 @@ impl ChatWidget {
                 // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
                 // including thread-snapshot replay, and forward
                 // ItemCompleted(TurnItem::AgentMessage(_)) instead.
-                self.on_agent_message(message)
+                self.on_agent_message(message, replay_timestamp)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
@@ -5473,14 +5592,16 @@ impl ChatWidget {
             }
             EventMsg::UserMessage(ev) => {
                 if from_replay || self.should_render_realtime_user_message_event(&ev) {
-                    self.on_user_message_event(ev);
+                    self.on_user_message_event(ev, replay_timestamp);
                 }
             }
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
-            EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::ContextCompacted(_) => {
+                self.on_agent_message("Context compacted".to_owned(), /*replay_timestamp*/ None)
+            }
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,
                 model,
@@ -5572,16 +5693,16 @@ impl ChatWidget {
                                     .collect(),
                                 text_elements: pending.user_message.text_elements,
                             };
-                            self.on_user_message_event(pending_event);
+                            self.on_user_message_event(pending_event, /*replay_timestamp*/ None);
                         } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
                         {
                             tracing::warn!(
                                 "pending steer matched compare key but queue was empty when rendering committed user message"
                             );
-                            self.on_user_message_event(event);
+                            self.on_user_message_event(event, /*replay_timestamp*/ None);
                         }
                     } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
+                        self.on_user_message_event(event, /*replay_timestamp*/ None);
                     }
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
@@ -5656,7 +5777,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_user_message_event(&mut self, event: UserMessageEvent) {
+    fn on_user_message_event(&mut self, event: UserMessageEvent, replay_timestamp: Option<String>) {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
         let remote_image_urls = event.images.unwrap_or_default();
@@ -5664,12 +5785,17 @@ impl ChatWidget {
             || !event.text_elements.is_empty()
             || !remote_image_urls.is_empty()
         {
-            self.add_to_history(history_cell::new_user_prompt(
+            let cell: Box<dyn history_cell::HistoryCell> = Box::new(history_cell::new_user_prompt(
                 event.message,
                 event.text_elements,
                 event.local_images,
                 remote_image_urls,
             ));
+            let cell = match replay_timestamp {
+                Some(timestamp) => history_cell::timestamp_history_cell_with_value(cell, timestamp),
+                None => cell,
+            };
+            self.add_boxed_history(cell);
         }
 
         // User messages reset separator state so the next agent response doesn't add a stray break.

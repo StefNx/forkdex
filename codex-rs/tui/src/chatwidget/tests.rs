@@ -179,6 +179,31 @@ async fn resumed_initial_messages_render_history() {
 
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
+    let user_message = EventMsg::UserMessage(UserMessageEvent {
+        message: "hello from user".to_string(),
+        images: None,
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+    });
+    let agent_message = EventMsg::AgentMessage(AgentMessageEvent {
+        message: "assistant reply".to_string(),
+        phase: None,
+        memory_citation: None,
+    });
+    let rollout_text = [
+        serde_json::to_string(&codex_protocol::protocol::RolloutLine {
+            timestamp: "09:41".to_string(),
+            item: codex_protocol::protocol::RolloutItem::EventMsg(user_message.clone()),
+        })
+        .unwrap(),
+        serde_json::to_string(&codex_protocol::protocol::RolloutLine {
+            timestamp: "09:42".to_string(),
+            item: codex_protocol::protocol::RolloutItem::EventMsg(agent_message.clone()),
+        })
+        .unwrap(),
+    ]
+    .join("\n");
+    std::fs::write(rollout_file.path(), format!("{rollout_text}\n")).unwrap();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
@@ -193,19 +218,7 @@ async fn resumed_initial_messages_render_history() {
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: Some(vec![
-            EventMsg::UserMessage(UserMessageEvent {
-                message: "hello from user".to_string(),
-                images: None,
-                text_elements: Vec::new(),
-                local_images: Vec::new(),
-            }),
-            EventMsg::AgentMessage(AgentMessageEvent {
-                message: "assistant reply".to_string(),
-                phase: None,
-                memory_citation: None,
-            }),
-        ]),
+        initial_messages: Some(vec![user_message, agent_message]),
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
     };
@@ -235,6 +248,8 @@ async fn resumed_initial_messages_render_history() {
         text_blob.contains("assistant reply"),
         "expected replayed agent message",
     );
+    assert!(text_blob.contains("[09:41]"), "expected preserved user timestamp");
+    assert!(text_blob.contains("[09:42]"), "expected preserved agent timestamp");
 }
 
 #[tokio::test]

@@ -356,6 +356,12 @@ fn render_message_timestamp_line(timestamp: &str) -> Line<'static> {
     ])
 }
 
+fn format_timestamp_label(timestamp: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|dt| dt.with_timezone(&Local).format("%H:%M").to_string())
+        .unwrap_or_else(|_| timestamp.to_string())
+}
+
 #[derive(Debug)]
 pub(crate) struct TimestampedHistoryCell {
     timestamp: String,
@@ -400,13 +406,20 @@ impl HistoryCell for TimestampedHistoryCell {
 
 pub(crate) fn timestamp_history_cell_if_needed(cell: Box<dyn HistoryCell>) -> Box<dyn HistoryCell> {
     if cell.wants_timestamp() {
-        Box::new(TimestampedHistoryCell::new(
-            cell,
-            Local::now().format("%H:%M").to_string(),
-        ))
+        timestamp_history_cell_with_value(cell, Local::now().to_rfc3339())
     } else {
         cell
     }
+}
+
+pub(crate) fn timestamp_history_cell_with_value(
+    cell: Box<dyn HistoryCell>,
+    timestamp: impl AsRef<str>,
+) -> Box<dyn HistoryCell> {
+    Box::new(TimestampedHistoryCell::new(
+        cell,
+        format_timestamp_label(timestamp.as_ref()),
+    ))
 }
 
 impl HistoryCell for UserHistoryCell {
