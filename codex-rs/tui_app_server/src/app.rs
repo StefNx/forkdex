@@ -3565,7 +3565,8 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
+                let cell: Arc<dyn HistoryCell> =
+                    crate::history_cell::timestamp_history_cell_if_needed(cell).into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();

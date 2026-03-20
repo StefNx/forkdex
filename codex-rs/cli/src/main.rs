@@ -61,12 +61,7 @@ use codex_terminal_detection::TerminalName;
     author,
     version,
     // If a sub‑command is given, ignore requirements of the default args.
-    subcommand_negates_reqs = true,
-    // The executable is sometimes invoked via a platform‑specific name like
-    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
-    // the generic `codex` command name that users run.
-    bin_name = "codex",
-    override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+    subcommand_negates_reqs = true
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -587,6 +582,37 @@ fn main() -> anyhow::Result<()> {
     })
 }
 
+fn invoked_as_forkdex() -> bool {
+    std::env::args_os()
+        .next()
+        .and_then(|arg0| {
+            PathBuf::from(arg0)
+                .file_name()
+                .and_then(|name| name.to_str().map(str::to_owned))
+        })
+        .is_some_and(|name| name == "forkdex")
+}
+
+fn apply_forkdex_defaults_for_program(program_name: &str, interactive: &mut TuiCli) {
+    if program_name != "forkdex" {
+        return;
+    }
+
+    let has_explicit_execution_mode = interactive.approval_policy.is_some()
+        || interactive.sandbox_mode.is_some()
+        || interactive.full_auto
+        || interactive.dangerously_bypass_approvals_and_sandbox;
+    if !has_explicit_execution_mode {
+        interactive.dangerously_bypass_approvals_and_sandbox = true;
+    }
+}
+
+fn apply_forkdex_defaults(interactive: &mut TuiCli) {
+    if invoked_as_forkdex() {
+        apply_forkdex_defaults_for_program("forkdex", interactive);
+    }
+}
+
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
@@ -603,6 +629,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 
     match subcommand {
         None => {
+            apply_forkdex_defaults(&mut interactive);
             prepend_config_flags(
                 &mut interactive.config_overrides,
                 root_config_overrides.clone(),
@@ -702,6 +729,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 all,
                 config_overrides,
             );
+            apply_forkdex_defaults(&mut interactive);
             let exit_info = run_interactive_tui(
                 interactive,
                 remote.remote.or(root_remote.clone()),
@@ -725,6 +753,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 all,
                 config_overrides,
             );
+            apply_forkdex_defaults(&mut interactive);
             let exit_info = run_interactive_tui(
                 interactive,
                 remote.remote.or(root_remote.clone()),
@@ -1383,6 +1412,21 @@ mod tests {
             unreachable!()
         };
         app_server
+    }
+
+    #[test]
+    fn forkdex_defaults_to_yolo() {
+        let mut interactive = TuiCli::try_parse_from(["forkdex"]).expect("parse");
+        apply_forkdex_defaults_for_program("forkdex", &mut interactive);
+        assert!(interactive.dangerously_bypass_approvals_and_sandbox);
+    }
+
+    #[test]
+    fn forkdex_keeps_explicit_execution_flags() {
+        let mut interactive = TuiCli::try_parse_from(["forkdex", "--full-auto"]).expect("parse");
+        apply_forkdex_defaults_for_program("forkdex", &mut interactive);
+        assert!(interactive.full_auto);
+        assert!(!interactive.dangerously_bypass_approvals_and_sandbox);
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {

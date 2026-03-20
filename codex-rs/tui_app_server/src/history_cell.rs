@@ -37,6 +37,7 @@ use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::adaptive_wrap_lines;
 use base64::Engine;
+use chrono::Local;
 use codex_app_server_protocol::McpServerStatus;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
@@ -155,6 +156,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     }
 
     fn is_stream_continuation(&self) -> bool {
+        false
+    }
+
+    fn wants_timestamp(&self) -> bool {
         false
     }
 
@@ -291,6 +296,72 @@ fn trim_trailing_blank_lines(mut lines: Vec<Line<'static>>) -> Vec<Line<'static>
     lines
 }
 
+fn is_blank_line(line: &Line<'_>) -> bool {
+    line.spans
+        .iter()
+        .all(|span| span.content.trim().is_empty())
+}
+
+fn render_message_timestamp_line(timestamp: &str) -> Line<'static> {
+    Line::from(vec![
+        "  ".into(),
+        Span::styled(format!("[{timestamp}]"), Style::default().dim()),
+    ])
+}
+
+#[derive(Debug)]
+pub(crate) struct TimestampedHistoryCell {
+    timestamp: String,
+    inner: Box<dyn HistoryCell>,
+}
+
+impl TimestampedHistoryCell {
+    fn new(inner: Box<dyn HistoryCell>, timestamp: String) -> Self {
+        Self { timestamp, inner }
+    }
+
+    fn lines_with_timestamp(&self, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+        let mut lines = lines;
+        if lines.first().is_some_and(is_blank_line) {
+            lines.remove(0);
+        }
+
+        let mut out = Vec::with_capacity(lines.len() + 1);
+        out.push(render_message_timestamp_line(&self.timestamp));
+        out.extend(lines);
+        out
+    }
+}
+
+impl HistoryCell for TimestampedHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines_with_timestamp(self.inner.display_lines(width))
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines_with_timestamp(self.inner.transcript_lines(width))
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        self.inner.is_stream_continuation()
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        self.inner.transcript_animation_tick()
+    }
+}
+
+pub(crate) fn timestamp_history_cell_if_needed(cell: Box<dyn HistoryCell>) -> Box<dyn HistoryCell> {
+    if cell.wants_timestamp() {
+        Box::new(TimestampedHistoryCell::new(
+            cell,
+            Local::now().format("%H:%M").to_string(),
+        ))
+    } else {
+        cell
+    }
+}
+
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let wrap_width = width
@@ -374,6 +445,10 @@ impl HistoryCell for UserHistoryCell {
 
         lines.push(Line::from("").style(style));
         lines
+    }
+
+    fn wants_timestamp(&self) -> bool {
+        true
     }
 }
 
@@ -473,6 +548,10 @@ impl HistoryCell for AgentMessageCell {
 
     fn is_stream_continuation(&self) -> bool {
         !self.is_first_line
+    }
+
+    fn wants_timestamp(&self) -> bool {
+        self.is_first_line
     }
 }
 
