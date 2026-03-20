@@ -2466,6 +2466,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        shared_mcp_backend_pool: None,
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -3265,6 +3266,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        shared_mcp_backend_pool: None,
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),

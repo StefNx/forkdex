@@ -1800,6 +1800,7 @@ impl Session {
                 &config.permissions.approval_policy,
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+            shared_mcp_backend_pool: agent_control.shared_mcp_backend_pool(),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
             ),
@@ -1924,17 +1925,40 @@ impl Session {
             cancel_guard.cancel();
             *cancel_guard = CancellationToken::new();
         }
-        let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_statuses.clone(),
-            &session_configuration.approval_policy,
-            tx_event.clone(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth),
-            tool_plugin_provenance,
-        )
+        let (mcp_connection_manager, cancel_token) = async {
+            match sess.services.shared_mcp_backend_pool.as_ref() {
+                Some(shared_mcp_backend_pool) => (
+                    McpConnectionManager::new_with_pool(
+                        shared_mcp_backend_pool.as_ref(),
+                        &mcp_servers,
+                        config.mcp_oauth_credentials_store_mode,
+                        auth_statuses.clone(),
+                        &session_configuration.approval_policy,
+                        tx_event.clone(),
+                        sandbox_state,
+                        config.codex_home.clone(),
+                        codex_apps_tools_cache_key(auth),
+                        tool_plugin_provenance,
+                    )
+                    .await,
+                    CancellationToken::new(),
+                ),
+                None => {
+                    McpConnectionManager::new(
+                        &mcp_servers,
+                        config.mcp_oauth_credentials_store_mode,
+                        auth_statuses.clone(),
+                        &session_configuration.approval_policy,
+                        tx_event.clone(),
+                        sandbox_state,
+                        config.codex_home.clone(),
+                        codex_apps_tools_cache_key(auth),
+                        tool_plugin_provenance,
+                    )
+                    .await
+                }
+            }
+        }
         .instrument(info_span!(
             "session_init.mcp_manager_init",
             otel.name = "session_init.mcp_manager_init",
@@ -4059,18 +4083,39 @@ impl Session {
             guard.cancel();
             *guard = CancellationToken::new();
         }
-        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            store_mode,
-            auth_statuses,
-            &turn_context.config.permissions.approval_policy,
-            self.get_tx_event(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            tool_plugin_provenance,
-        )
-        .await;
+        let (refreshed_manager, cancel_token) = match self.services.shared_mcp_backend_pool.as_ref()
+        {
+            Some(shared_mcp_backend_pool) => (
+                McpConnectionManager::new_with_pool(
+                    shared_mcp_backend_pool.as_ref(),
+                    &mcp_servers,
+                    store_mode,
+                    auth_statuses,
+                    &turn_context.config.permissions.approval_policy,
+                    self.get_tx_event(),
+                    sandbox_state,
+                    config.codex_home.clone(),
+                    codex_apps_tools_cache_key(auth.as_ref()),
+                    tool_plugin_provenance,
+                )
+                .await,
+                CancellationToken::new(),
+            ),
+            None => {
+                McpConnectionManager::new(
+                    &mcp_servers,
+                    store_mode,
+                    auth_statuses,
+                    &turn_context.config.permissions.approval_policy,
+                    self.get_tx_event(),
+                    sandbox_state,
+                    config.codex_home.clone(),
+                    codex_apps_tools_cache_key(auth.as_ref()),
+                    tool_plugin_provenance,
+                )
+                .await
+            }
+        };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             if guard.is_cancelled() {
