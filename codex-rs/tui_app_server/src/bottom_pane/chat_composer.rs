@@ -208,8 +208,6 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
-use crate::clipboard_paste::normalize_pasted_path;
-use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::tui::FrameRequester;
 use crate::ui_consts::LIVE_PREFIX_COLS;
@@ -648,6 +646,7 @@ impl ChatComposer {
         self.config.slash_commands_enabled
     }
 
+    #[allow(dead_code)]
     fn image_paste_enabled(&self) -> bool {
         self.config.image_paste_enabled
     }
@@ -767,9 +766,8 @@ impl ChatComposer {
     ///
     /// - If the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a placeholder
     ///   element (expanded on submit) and stores the full text in `pending_pastes`.
-    /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
-    ///   trailing space so the user can keep typing naturally.
-    /// - Otherwise, inserts the pasted text directly into the textarea.
+    /// - Otherwise, inserts the pasted text directly into the textarea. This includes filesystem
+    ///   paths; pasted or dragged image paths stay text instead of auto-attaching an image.
     ///
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
@@ -784,40 +782,12 @@ impl ChatComposer {
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if char_count > 1
-            && self.image_paste_enabled()
-            && self.handle_paste_image_path(pasted.clone())
-        {
-            self.textarea.insert_str(" ");
         } else {
             self.insert_str(&pasted);
         }
         self.paste_burst.clear_after_explicit_paste();
         self.sync_popups();
         true
-    }
-
-    pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
-        let Some(path_buf) = normalize_pasted_path(&pasted) else {
-            return false;
-        };
-
-        // normalize_pasted_path already handles Windows → WSL path conversion,
-        // so we can directly try to read the image dimensions.
-        match image::image_dimensions(&path_buf) {
-            Ok((width, height)) => {
-                tracing::info!("OK: {pasted}");
-                tracing::debug!("image dimensions={}x{}", width, height);
-                let format = pasted_image_format(&path_buf);
-                tracing::debug!("attached image format={}", format.label());
-                self.attach_image(path_buf);
-                true
-            }
-            Err(err) => {
-                tracing::trace!("ERR: {err}");
-                false
-            }
-        }
     }
 
     /// Enable or disable paste-burst handling.
@@ -8245,7 +8215,7 @@ mod tests {
     }
 
     #[test]
-    fn pasting_filepath_attaches_image() {
+    fn pasting_filepath_keeps_path_text() {
         let tmp = tempdir().expect("create TempDir");
         let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
@@ -8264,10 +8234,8 @@ mod tests {
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
         assert!(needs_redraw);
-        assert!(composer.textarea.text().starts_with("[Image #1] "));
-
-        let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path]);
+        assert_eq!(composer.textarea.text(), tmp_path.to_string_lossy());
+        assert!(composer.take_recent_submission_images().is_empty());
     }
 
     #[test]

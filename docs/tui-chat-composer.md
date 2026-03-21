@@ -84,7 +84,8 @@ Key effects when disabled:
 - When `slash_commands_enabled` is `false`, the composer does not expand custom prompts in
   `prepare_submission_text`.
 - When `slash_commands_enabled` is `false`, slash-context paste-burst exceptions are disabled.
-- When `image_paste_enabled` is `false`, file-path paste image attachment is skipped.
+- Pasted or dragged filesystem paths always remain text; they are not auto-promoted to image
+  attachments.
 - `ChatWidget` may toggle `image_paste_enabled` at runtime based on the selected model's
   `input_modalities`; attach and submit paths also re-check support and emit a warning instead of
   dropping the draft.

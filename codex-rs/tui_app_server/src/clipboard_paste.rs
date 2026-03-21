@@ -22,6 +22,7 @@ impl std::fmt::Display for PasteImageError {
 }
 impl std::error::Error for PasteImageError {}
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodedImageFormat {
     Png,
@@ -53,39 +54,22 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     tracing::debug!("attempting clipboard image read");
     let mut cb = arboard::Clipboard::new()
         .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()))?;
-    // Sometimes images on the clipboard come as files (e.g. when copy/pasting from
-    // Finder), sometimes they come as image data (e.g. when pasting from Chrome).
-    // Accept both, and prefer files if both are present.
-    let files = cb
-        .get()
-        .file_list()
-        .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()));
-    let dyn_img = if let Some(img) = files
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|f| image::open(f).ok())
-    {
-        tracing::debug!(
-            "clipboard image opened from file: {}x{}",
-            img.width(),
-            img.height()
-        );
-        img
-    } else {
-        let _span = tracing::debug_span!("get_image").entered();
-        let img = cb
-            .get_image()
-            .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
-        let w = img.width as u32;
-        let h = img.height as u32;
-        tracing::debug!("clipboard image opened from image: {}x{}", w, h);
+    // Only treat actual clipboard image payloads as image pastes. Clipboard file
+    // references should remain plain-text paths so drag/drop and pasted paths are
+    // preserved as text by the normal paste path.
+    let _span = tracing::debug_span!("get_image").entered();
+    let img = cb
+        .get_image()
+        .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
+    let w = img.width as u32;
+    let h = img.height as u32;
+    tracing::debug!("clipboard image opened from image: {}x{}", w, h);
 
-        let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
-            return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
-        };
-
-        image::DynamicImage::ImageRgba8(rgba_img)
+    let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
+        return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
     };
+
+    let dyn_img = image::DynamicImage::ImageRgba8(rgba_img);
 
     let mut png: Vec<u8> = Vec::new();
     {
@@ -119,7 +103,7 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
 /// Convenience: write to a temp file and return its path + info.
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
-    // First attempt: read image from system clipboard via arboard (native paths or image data).
+    // Read image data from the system clipboard.
     match paste_image_as_png() {
         Ok((png, info)) => {
             // Create a unique temporary file with a .png suffix to avoid collisions.
@@ -242,6 +226,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 /// - `file://` URLs (converted to local paths)
 /// - Windows/UNC paths
 /// - shell-escaped single paths (via `shlex`)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     let pasted = pasted.trim();
     let unquoted = pasted
@@ -324,6 +309,7 @@ fn convert_windows_path_to_wsl(input: &str) -> Option<PathBuf> {
     Some(result)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn normalize_windows_path(input: &str) -> Option<PathBuf> {
     // Drive letter path: C:\ or C:/
     let drive = input
@@ -355,6 +341,7 @@ fn normalize_windows_path(input: &str) -> Option<PathBuf> {
 }
 
 /// Infer an image format for the provided path based on its extension.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     match path
         .extension()

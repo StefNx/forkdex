@@ -1,32 +1,43 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
+<p align="center"><code>cargo install --path codex-rs/cli --bin forkdex</code></p>
+<p align="center"><strong>Forkdex</strong> is a personalized fork of OpenAI Codex CLI with a small set of focused usability improvements on top of upstream.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
 </p>
 </br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+Forkdex stays close to upstream Codex, but changes a few daily-use details in the terminal experience.
+</br>The upstream project is still available at <a href="https://github.com/openai/codex">openai/codex</a>.</p>
 
 ---
 
+## What Forkdex changes
+
+Forkdex is meant to be a practical personal build of Codex rather than a large rewrite. Current improvements include:
+
+- `forkdex` binary defaults and branding instead of `codex`-only wording
+- message timestamps in chat history
+- preserved timestamps when replaying or resuming sessions
+- red highlighting for assistant `but` tokens
+- smarter image paste handling, so pasted or dragged local image file paths stay as text while real clipboard image data still attaches as an image
+
+## Relationship To Upstream
+
+This repository is a fork of [openai/codex](https://github.com/openai/codex) and keeps the upstream structure, docs, and build system wherever possible.
+
+Most of the documentation below still refers to `codex`, OpenAI's original naming, and upstream distribution paths. In this fork, the customized CLI binary is `forkdex`.
+
 ## Quickstart
 
-### Installing and running Codex CLI
+### Installing and running Forkdex
 
-Install globally with your preferred package manager:
-
-```shell
-# Install using npm
-npm install -g @openai/codex
-```
+Build the customized CLI from source:
 
 ```shell
-# Install using Homebrew
-brew install --cask codex
+cargo install --path codex-rs/cli --bin forkdex
 ```
 
-Then simply run `codex` to get started.
+Then run `forkdex` to get started.
+
+If you want the upstream distribution instead, follow the original Codex instructions below.
 
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
